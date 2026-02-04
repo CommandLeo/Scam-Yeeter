@@ -66,7 +66,7 @@ const detectionChannelsCommand = new SlashCommandBuilder()
           .setRequired(true)
       )
   )
-  .addSubcommand(subcommand => subcommand.setName("edit").setDescription("Edit detection channels"))
+  .addSubcommand(subcommand => subcommand.setName("edit").setDescription("Edit detection channels inside a modal"))
   .addSubcommand(subcommand => subcommand.setName("list").setDescription("List all detection channels"))
   .setDefaultMemberPermissions(0);
 
