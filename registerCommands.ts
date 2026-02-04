@@ -10,12 +10,14 @@ const logChannelCommand = new SlashCommandBuilder()
       .addChannelTypes(ChannelType.GuildText)
       .addChannelTypes(ChannelType.GuildAnnouncement)
       .setRequired(false)
-  );
+  )
+  .setDefaultMemberPermissions(0);
 
 const timeoutDurationCommand = new SlashCommandBuilder()
   .setName("timeout_duration")
   .setDescription("Retrieve or set the timeout duration for detected scammers")
-  .addIntegerOption(option => option.setName("duration").setDescription("The timeout duration in milliseconds").setRequired(false));
+  .addIntegerOption(option => option.setName("duration").setDescription("The timeout duration in milliseconds").setRequired(false))
+  .setDefaultMemberPermissions(0);
 
 const detectionStrategyCommand = new SlashCommandBuilder()
   .setName("detection_strategy")
@@ -26,12 +28,14 @@ const detectionStrategyCommand = new SlashCommandBuilder()
       .setDescription("The detection strategy to use")
       .addChoices({ name: "Multiple Messages", value: "multiple_messages" }, { name: "Detection Channels", value: "detection_channels" })
       .setRequired(false)
-  );
+  )
+  .setDefaultMemberPermissions(0);
 
 const scamMessageAmountCommand = new SlashCommandBuilder()
   .setName("scam_message_amount")
   .setDescription("Retrieve or set the number of messages a user must send for a scam to be detected")
-  .addIntegerOption(option => option.setName("amount").setDescription("The number of messages").setRequired(false));
+  .addIntegerOption(option => option.setName("amount").setDescription("The number of messages").setRequired(false))
+  .setDefaultMemberPermissions(0);
 
 const detectionChannelsCommand = new SlashCommandBuilder()
   .setName("detection_channels")
@@ -63,7 +67,8 @@ const detectionChannelsCommand = new SlashCommandBuilder()
       )
   )
   .addSubcommand(subcommand => subcommand.setName("edit").setDescription("Edit detection channels"))
-  .addSubcommand(subcommand => subcommand.setName("list").setDescription("List all detection channels"));
+  .addSubcommand(subcommand => subcommand.setName("list").setDescription("List all detection channels"))
+  .setDefaultMemberPermissions(0);
 
 export async function registerCommands(guildId: string) {
   const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN!);
