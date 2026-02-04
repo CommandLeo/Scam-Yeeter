@@ -436,10 +436,15 @@ client.on("guildCreate", async guild => {
     saveConfig(guild.id);
   }
 
-  await registerCommands(guild.id);
+  try {
+    await registerCommands(guild.id);
+    console.log(`Registered commands for guild "${guild.name}" (${guild.id})`);
+  } catch (error: any) {
+    console.error(`Failed to register commands for guild "${guild.name}" (${guild.id}):`, error.message);
+  }
 });
 
-client.on("clientReady", async () => {
+client.on("clientReady", () => {
   console.log(`Logged in as ${client.user?.tag}`);
 });
 
