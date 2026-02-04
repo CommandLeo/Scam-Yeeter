@@ -341,10 +341,6 @@ async function detectionChannelsCommand(interaction: ChatInputCommandInteraction
 
   if (subcommand === "add") {
     const channel = interaction.options.getChannel("channel", true);
-    if (!(channel instanceof TextChannel)) {
-      await interaction.reply({ content: "Please select a valid text channel.", flags: MessageFlags.Ephemeral });
-      return;
-    }
     if (config.detectionChannelIds.includes(channel.id)) {
       await interaction.reply({ content: `${channelMention(channel.id)} is already a detection channel.`, flags: MessageFlags.Ephemeral });
       return;
@@ -354,10 +350,6 @@ async function detectionChannelsCommand(interaction: ChatInputCommandInteraction
     saveConfig(interaction.guildId!);
   } else if (subcommand === "remove") {
     const channel = interaction.options.getChannel("channel", true);
-    if (!(channel instanceof TextChannel)) {
-      await interaction.reply({ content: "Please select a valid text channel.", flags: MessageFlags.Ephemeral });
-      return;
-    }
     const index = config.detectionChannelIds.indexOf(channel.id);
     if (index === -1) {
       await interaction.reply({ content: `${channelMention(channel.id)} is not a detection channel.`, flags: MessageFlags.Ephemeral });
@@ -372,6 +364,7 @@ async function detectionChannelsCommand(interaction: ChatInputCommandInteraction
       .setPlaceholder("Select detection channels")
       .setDefaultChannels(config.detectionChannelIds)
       .addChannelTypes(ChannelType.GuildText)
+      .addChannelTypes(ChannelType.GuildAnnouncement)
       .setMinValues(0)
       .setMaxValues(25)
       .setRequired(false);

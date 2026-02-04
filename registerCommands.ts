@@ -3,7 +3,14 @@ import { REST, Routes, SlashCommandBuilder, ChannelType } from "discord.js";
 const logChannelCommand = new SlashCommandBuilder()
   .setName("log_channel")
   .setDescription("Retrieve or set the log channel")
-  .addChannelOption(option => option.setName("channel").setDescription("The channel to set as log channel").addChannelTypes(ChannelType.GuildText).setRequired(false));
+  .addChannelOption(option =>
+    option
+      .setName("channel")
+      .setDescription("The channel to set as log channel")
+      .addChannelTypes(ChannelType.GuildText)
+      .addChannelTypes(ChannelType.GuildAnnouncement)
+      .setRequired(false)
+  );
 
 const timeoutDurationCommand = new SlashCommandBuilder()
   .setName("timeout_duration")
@@ -33,14 +40,26 @@ const detectionChannelsCommand = new SlashCommandBuilder()
     subcommand
       .setName("add")
       .setDescription("Add a detection channel")
-      .addChannelOption(option => option.setName("channel").setDescription("The channel to add to detection channels").addChannelTypes(ChannelType.GuildText).setRequired(true))
+      .addChannelOption(option =>
+        option
+          .setName("channel")
+          .setDescription("The channel to add to detection channels")
+          .addChannelTypes(ChannelType.GuildText)
+          .addChannelTypes(ChannelType.GuildAnnouncement)
+          .setRequired(true)
+      )
   )
   .addSubcommand(subcommand =>
     subcommand
       .setName("remove")
       .setDescription("Remove a detection channel")
       .addChannelOption(option =>
-        option.setName("channel").setDescription("The channel to remove from detection channels").addChannelTypes(ChannelType.GuildText).setRequired(true)
+        option
+          .setName("channel")
+          .setDescription("The channel to remove from detection channels")
+          .addChannelTypes(ChannelType.GuildText)
+          .addChannelTypes(ChannelType.GuildAnnouncement)
+          .setRequired(true)
       )
   )
   .addSubcommand(subcommand => subcommand.setName("edit").setDescription("Edit detection channels"))
