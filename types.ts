@@ -10,7 +10,7 @@ export interface MessageReference {
   timestamp: number;
 }
 
-export type DetectionStrategy = "multiple_messages" | "detection_channels";
+export type DetectionStrategy = "multiple_messages" | "detection_channels" | "both";
 export interface GuildConfig {
   logChannelId: ChannelId | null;
   timeoutDuration: number;

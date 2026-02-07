@@ -76,7 +76,7 @@ for (const file of fs.globSync("./configs/*.json")) {
     if (typeof timeoutDuration !== "number") {
       throw new Error("Invalid timeoutDuration");
     }
-    if (detectionStrategy !== "multiple_messages" && detectionStrategy !== "detection_channels") {
+    if (detectionStrategy !== "multiple_messages" && detectionStrategy !== "detection_channels" && detectionStrategy !== "both") {
       throw new Error("Invalid detectionStrategy");
     }
     if (typeof scamMessageAmount !== "number") {
@@ -220,7 +220,12 @@ client.on("messageCreate", async message => {
   const messageId = message.id;
 
   let cond = false;
-  if (detectionStrategy === "multiple_messages") {
+  if (detectionStrategy === "detection_channels" || detectionStrategy === "both") {
+    if (detectionChannels.includes(channelId)) {
+      cond = true;
+    }
+  }
+  if ((detectionStrategy === "multiple_messages" || detectionStrategy === "both") && !cond) {
     let guildMap = messageReferences.get(guildId);
     if (!guildMap) {
       guildMap = new Map();
@@ -236,14 +241,10 @@ client.on("messageCreate", async message => {
     if (recentMessages.length >= scamMessageAmount - 1) {
       cond = true;
     }
-  } else if (detectionStrategy === "detection_channels") {
-    cond = detectionChannels.includes(channelId);
   }
 
   if (cond) {
-    console.log(
-      `[!] Scam detected from user ${message.author.username} (${userId}) in channel #${message.channel.name} (${channelId}) in guild "${message.guild.name}" (${guildId})`
-    );
+    console.log(`[!] Scam detected from user ${message.author.username} (${userId}) in channel #${message.channel.name} (${channelId}) in guild "${message.guild.name}" (${guildId})`);
     handleScam(message, config);
   } else {
     if (!messageReferences.has(guildId)) {
@@ -255,9 +256,7 @@ client.on("messageCreate", async message => {
     }
     const refs = guildMap.get(userId)!;
     refs.push({ channelId: channelId, messageId: messageId, timestamp: message.createdTimestamp });
-    console.log(
-      `Flagged suspicious message from user ${message.author.username} (${userId}) in channel #${message.channel.name} (${channelId}) in guild "${message.guild.name}" (${guildId})`
-    );
+    console.log(`Flagged suspicious message from user ${message.author.username} (${userId}) in channel #${message.channel.name} (${channelId}) in guild "${message.guild.name}" (${guildId})`);
   }
 });
 

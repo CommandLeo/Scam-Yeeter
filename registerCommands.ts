@@ -28,7 +28,7 @@ export const detectionStrategyCommand = new SlashCommandBuilder()
     option
       .setName("strategy")
       .setDescription("The detection strategy to use")
-      .addChoices({ name: "Multiple Messages", value: "multiple_messages" }, { name: "Detection Channels", value: "detection_channels" })
+      .addChoices({ name: "Multiple Messages", value: "multiple_messages" }, { name: "Detection Channels", value: "detection_channels" }, { name: "Both", value: "both" })
       .setRequired(false)
   )
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild);

@@ -78,7 +78,7 @@ Set or view the timeout duration for detected scammers.
 
 ### `/detection_strategy [<strategy>]`
 Set or view the detection strategy.
-- **strategy** (optional): Either `Multiple Messages` or `Detection Channels`
+- **strategy** (optional): Either `Multiple Messages`, `Detection Channels` or `Both` (which applies both)
 - If no strategy is provided, displays the current setting
 
 **Strategies:**
@@ -86,7 +86,7 @@ Set or view the detection strategy.
 - `detection_channels`: Any suspicious message in designated channels is flagged immediately
 
 ### `/scam_message_amount [<amount>]`
-Set or view the number of suspicious messages required to trigger detection (only applies to `multiple_messages` strategy).
+Set or view the number of suspicious messages required to trigger detection (only applies to the `multiple_messages` strategy).
 - **amount** (optional): Number of messages (e.g. 3)
 - If no amount is provided, displays the current setting
 
