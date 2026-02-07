@@ -1,6 +1,8 @@
-import { REST, Routes, SlashCommandBuilder, ChannelType } from "discord.js";
+import { REST, Routes, SlashCommandBuilder, ChannelType, PermissionFlagsBits, type Guild } from "discord.js";
 
-const logChannelCommand = new SlashCommandBuilder()
+const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN!);
+
+export const logChannelCommand = new SlashCommandBuilder()
   .setName("log_channel")
   .setDescription("Retrieve or set the log channel")
   .addChannelOption(option =>
@@ -11,15 +13,15 @@ const logChannelCommand = new SlashCommandBuilder()
       .addChannelTypes(ChannelType.GuildAnnouncement)
       .setRequired(false)
   )
-  .setDefaultMemberPermissions(0);
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild);
 
-const timeoutDurationCommand = new SlashCommandBuilder()
+export const timeoutDurationCommand = new SlashCommandBuilder()
   .setName("timeout_duration")
   .setDescription("Retrieve or set the timeout duration for detected scammers")
   .addIntegerOption(option => option.setName("duration").setDescription("The timeout duration in milliseconds").setRequired(false))
-  .setDefaultMemberPermissions(0);
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild);
 
-const detectionStrategyCommand = new SlashCommandBuilder()
+export const detectionStrategyCommand = new SlashCommandBuilder()
   .setName("detection_strategy")
   .setDescription("Retrieve or set the detection strategy")
   .addStringOption(option =>
@@ -29,15 +31,15 @@ const detectionStrategyCommand = new SlashCommandBuilder()
       .addChoices({ name: "Multiple Messages", value: "multiple_messages" }, { name: "Detection Channels", value: "detection_channels" })
       .setRequired(false)
   )
-  .setDefaultMemberPermissions(0);
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild);
 
-const scamMessageAmountCommand = new SlashCommandBuilder()
+export const scamMessageAmountCommand = new SlashCommandBuilder()
   .setName("scam_message_amount")
   .setDescription("Retrieve or set the number of messages a user must send for a scam to be detected")
   .addIntegerOption(option => option.setName("amount").setDescription("The number of messages").setRequired(false))
-  .setDefaultMemberPermissions(0);
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild);
 
-const detectionChannelsCommand = new SlashCommandBuilder()
+export const detectionChannelsCommand = new SlashCommandBuilder()
   .setName("detection_channels")
   .setDescription("Set detection channels")
   .addSubcommand(subcommand =>
@@ -68,14 +70,25 @@ const detectionChannelsCommand = new SlashCommandBuilder()
   )
   .addSubcommand(subcommand => subcommand.setName("edit").setDescription("Edit detection channels inside a modal"))
   .addSubcommand(subcommand => subcommand.setName("list").setDescription("List all detection channels"))
-  .setDefaultMemberPermissions(0);
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild);
 
 export async function registerCommands(guildId: string) {
-  const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN!);
-
   await rest.put(Routes.applicationGuildCommands(process.env.DISCORD_CLIENT_ID!, guildId), {
     body: [logChannelCommand.toJSON(), timeoutDurationCommand.toJSON(), detectionStrategyCommand.toJSON(), scamMessageAmountCommand.toJSON(), detectionChannelsCommand.toJSON()]
   });
+}
+
+export async function registerCommandsInAllGuilds() {
+  const guilds = (await rest.get(Routes.userGuilds())) as Guild[];
+
+  for (const guild of guilds) {
+    try {
+      await registerCommands(guild.id);
+      console.log(`Registered commands for guild "${guild.name}" (${guild.id})`);
+    } catch (error) {
+      console.error(`Failed to register commands for guild "${guild.name}" (${guild.id}):`, error instanceof Error ? error.message : error);
+    }
+  }
 }
 
 if (import.meta.main) {
@@ -86,6 +99,11 @@ if (import.meta.main) {
     console.error("Please provide a guild ID as an argument.");
     process.exit(1);
   }
-  await registerCommands(guildId);
-  console.log(`Registered commands for guild ${guildId}`);
+
+  if (guildId.toLowerCase() === "all") {
+    await registerCommandsInAllGuilds();
+  } else {
+    await registerCommands(guildId);
+    console.log(`Registered commands for guild "${guildId}"`);
+  }
 }
