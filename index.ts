@@ -176,7 +176,7 @@ async function handleScam(message: Message, config: GuildConfig) {
     setTimeout(() => recentlyModerated.delete(message.author.id), 10_000);
 
     if (message.member?.moderatable) {
-      const timeoutDuration = config.timeoutDuration ?? THREE_DAYS;
+      const timeoutDuration = config.timeoutDuration ?? defaultConfig.timeoutDuration;
       await message.member.timeout(timeoutDuration, "Image scam").catch(error => {
         console.error(`Failed to timeout user ${message.author.username} (${message.author.id}) in guild "${message.guild!.name}" (${message.guild!.id}):`, error.message);
       });
@@ -297,7 +297,7 @@ async function timeoutDurationCommand(interaction: ChatInputCommandInteraction) 
     saveConfig(interaction.guildId!);
   } else {
     await interaction.reply({
-      content: `Current timeout duration is ${config.timeoutDuration} milliseconds. Default is ${THREE_DAYS} milliseconds.`,
+      content: `Current timeout duration is ${config.timeoutDuration} milliseconds. Default is ${defaultConfig.timeoutDuration} milliseconds.`,
       flags: MessageFlags.Ephemeral
     });
   }
