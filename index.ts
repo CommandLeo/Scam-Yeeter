@@ -20,9 +20,6 @@ import {
 import { registerCommands } from "./registerCommands.ts";
 import type { UserId, GuildId, MessageReference, DetectionStrategy, GuildConfig } from "./types.ts";
 
-const THREE_DAYS = 3 * 24 * 60 * 60 * 1000;
-const TEN_MINUTES = 10 * 60 * 1000;
-
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const DISCORD_CLIENT_ID = process.env.DISCORD_CLIENT_ID;
 
@@ -52,55 +49,58 @@ const client = new Client({
 const messageReferences = new Map<GuildId, Map<UserId, MessageReference[]>>();
 const recentlyModerated = new Set<UserId>();
 
-// Load guild configurations
+// Guild Config Management
 
-const defaultConfig: GuildConfig = {
-  logChannelId: null,
-  timeoutDuration: THREE_DAYS,
-  detectionStrategy: "multiple_messages",
-  scamMessageAmount: 3,
-  detectionChannelIds: []
-};
+const defaultTimeoutDuration = 3 * 24 * 60 * 60 * 1000; // 3 days
+const defaultDetectionStrategy: DetectionStrategy = "multiple_messages";
+function createDefaultConfig(guildId?: GuildId): GuildConfig {
+  return {
+    guildId,
+    logChannelId: null,
+    timeoutDuration: defaultTimeoutDuration,
+    detectionStrategy: defaultDetectionStrategy,
+    scamMessageAmount: 3,
+    detectionChannelIds: []
+  };
+}
+
 const configs = new Map<GuildId, GuildConfig>();
 fs.mkdirSync("./configs", { recursive: true });
 for (const file of fs.globSync("./configs/*.json")) {
   try {
     const data = fs.readFileSync(file, "utf-8");
-    const { guildId, logChannelId, timeoutDuration, detectionStrategy, scamMessageAmount, detectionChannelIds } = { ...defaultConfig, ...JSON.parse(data) };
-    if (!guildId || typeof guildId !== "string") {
-      throw new Error("Invalid or missing guildId");
+    const config: GuildConfig = { ...createDefaultConfig(), ...JSON.parse(data) };
+    if (!config.guildId) {
+      throw new Error("Missing guildId");
     }
-    if (logChannelId !== null && typeof logChannelId !== "string") {
+    if (typeof config.guildId !== "string") {
+      throw new Error("Invalid guildId");
+    }
+    if (config.logChannelId !== null && typeof config.logChannelId !== "string") {
       throw new Error("Invalid logChannelId");
     }
-    if (typeof timeoutDuration !== "number") {
+    if (typeof config.timeoutDuration !== "number") {
       throw new Error("Invalid timeoutDuration");
     }
-    if (detectionStrategy !== "multiple_messages" && detectionStrategy !== "detection_channels" && detectionStrategy !== "both") {
+    if (!["multiple_messages", "detection_channels", "both"].includes(config.detectionStrategy)) {
       throw new Error("Invalid detectionStrategy");
     }
-    if (typeof scamMessageAmount !== "number") {
+    if (typeof config.scamMessageAmount !== "number") {
       throw new Error("Invalid scamMessageAmount");
     }
-    if (!Array.isArray(detectionChannelIds) || !detectionChannelIds.every(id => typeof id === "string")) {
+    if (!Array.isArray(config.detectionChannelIds) || !config.detectionChannelIds.every(id => typeof id === "string")) {
       throw new Error("Invalid detectionChannelIds");
     }
-    configs.set(guildId, { logChannelId, timeoutDuration, detectionStrategy, scamMessageAmount, detectionChannelIds });
+    configs.set(config.guildId, config);
   } catch (error: any) {
     console.error(`Failed to load config ${file}:`, error.message);
   }
 }
 
 function saveConfig(guildId: GuildId) {
-  if (!guildId) return;
   const config = configs.get(guildId);
   if (!config) return;
-  const data = {
-    ...defaultConfig,
-    ...config,
-    guildId
-  };
-  fs.writeFileSync(`./configs/${guildId}.json`, JSON.stringify(data, null, 2));
+  fs.writeFileSync(`./configs/${guildId}.json`, JSON.stringify(config, null, 2));
 }
 
 // SCAM DETECTION AND HANDLING
@@ -113,6 +113,7 @@ async function deleteMessages(guildId: GuildId, authorId: UserId) {
   if (!cached || cached.length === 0) return 0;
 
   const now = Date.now();
+  const TEN_MINUTES = 10 * 60 * 1000;
   const validRefs = cached.filter(ref => ref.timestamp > now - TEN_MINUTES);
 
   const deletionPromises = validRefs.map(async ref => {
@@ -176,7 +177,7 @@ async function handleScam(message: Message, config: GuildConfig) {
     setTimeout(() => recentlyModerated.delete(message.author.id), 10_000);
 
     if (message.member?.moderatable) {
-      const timeoutDuration = config.timeoutDuration ?? defaultConfig.timeoutDuration;
+      const timeoutDuration = config.timeoutDuration;
       await message.member.timeout(timeoutDuration, "Image scam").catch(error => {
         console.error(`Failed to timeout user ${message.author.username} (${message.author.id}) in guild "${message.guild!.name}" (${message.guild!.id}):`, error.message);
       });
@@ -237,6 +238,7 @@ client.on("messageCreate", async message => {
       guildMap.set(userId, refs);
     }
     const now = Date.now();
+    const TEN_MINUTES = 10 * 60 * 1000;
     const recentMessages = refs.filter(ref => ref.timestamp > now - TEN_MINUTES);
     if (recentMessages.length >= scamMessageAmount - 1) {
       cond = true;
@@ -296,7 +298,7 @@ async function timeoutDurationCommand(interaction: ChatInputCommandInteraction) 
     saveConfig(interaction.guildId!);
   } else {
     await interaction.reply({
-      content: `Current timeout duration is ${config.timeoutDuration} milliseconds. Default is ${defaultConfig.timeoutDuration} milliseconds.`,
+      content: `Current timeout duration is ${config.timeoutDuration} milliseconds. Default is ${defaultTimeoutDuration} milliseconds.`,
       flags: MessageFlags.Ephemeral
     });
   }
@@ -391,20 +393,26 @@ client.on("interactionCreate", async interaction => {
     }
 
     if (!configs.has(guildId)) {
-      configs.set(guildId, { ...defaultConfig });
+      configs.set(guildId, createDefaultConfig(guildId));
       saveConfig(guildId);
     }
 
-    if (interaction.commandName === "log_channel") {
-      await logChannelCommand(interaction);
-    } else if (interaction.commandName === "timeout_duration") {
-      await timeoutDurationCommand(interaction);
-    } else if (interaction.commandName === "detection_strategy") {
-      await detectionStrategyCommand(interaction);
-    } else if (interaction.commandName === "scam_message_amount") {
-      await scamMessageAmountCommand(interaction);
-    } else if (interaction.commandName === "detection_channels") {
-      await detectionChannelsCommand(interaction);
+    switch (interaction.commandName) {
+      case "log_channel":
+        await logChannelCommand(interaction);
+        break;
+      case "timeout_duration":
+        await timeoutDurationCommand(interaction);
+        break;
+      case "detection_strategy":
+        await detectionStrategyCommand(interaction);
+        break;
+      case "scam_message_amount":
+        await scamMessageAmountCommand(interaction);
+        break;
+      case "detection_channels":
+        await detectionChannelsCommand(interaction);
+        break;
     }
   } else if (interaction.isModalSubmit()) {
     if (interaction.customId === "detection_channels_modal") {
@@ -431,7 +439,7 @@ client.on("guildCreate", async guild => {
   console.log(`Joined new guild: ${guild.name} (${guild.id})`);
 
   if (!configs.has(guild.id)) {
-    configs.set(guild.id, { ...defaultConfig });
+    configs.set(guild.id, createDefaultConfig(guild.id));
     saveConfig(guild.id);
   }
 
