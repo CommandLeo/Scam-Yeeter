@@ -1,6 +1,7 @@
 import "dotenv/config";
 import fs from "node:fs";
 import { TTLCache } from "@isaacs/ttlcache";
+import { z } from "zod";
 import {
   Client,
   GatewayIntentBits,
@@ -57,6 +58,20 @@ const imageScamTimeWindowMs = 5 * 60 * 1000; // 5 minutes
 const defaultInviteLinkChannelThreshold = 4;
 const inviteLinkTimeWindowMs = 5 * 60 * 1000; // 5 minutes
 
+const guildConfigSchema = z.object({
+  guildId: z.string().optional(),
+  logChannelId: z.string().nullable().default(null),
+  timeoutDuration: z.number().default(defaultTimeoutDuration),
+  detectionStrategy: z.enum(["multiple_messages", "detection_channels", "both"]).default(defaultDetectionStrategy),
+  scamMessageAmount: z.number().int().min(1).default(3),
+  detectionChannelIds: z.array(z.string()).default([]),
+  inviteLinkChannelThreshold: z.number().int().min(2).default(defaultInviteLinkChannelThreshold)
+});
+
+const persistedGuildConfigSchema = guildConfigSchema.extend({
+  guildId: z.string().min(1)
+});
+
 const scamImagesMessageReferences = new TTLCache<string, MessageReference[]>({
   ttl: imageScamTimeWindowMs,
   checkAgeOnGet: true,
@@ -70,15 +85,7 @@ const inviteLinkMessageReferences = new TTLCache<string, MessageReference[]>({
 const recentlyModerated = new Set<UserId>();
 
 function createDefaultConfig(guildId?: GuildId): GuildConfig {
-  return {
-    guildId,
-    logChannelId: null,
-    timeoutDuration: defaultTimeoutDuration,
-    detectionStrategy: defaultDetectionStrategy,
-    scamMessageAmount: 3,
-    detectionChannelIds: [],
-    inviteLinkChannelThreshold: defaultInviteLinkChannelThreshold
-  };
+  return guildConfigSchema.parse({ guildId });
 }
 
 const configs = new Map<GuildId, GuildConfig>();
@@ -86,31 +93,12 @@ fs.mkdirSync("./configs", { recursive: true });
 for (const file of fs.globSync("./configs/*.json")) {
   try {
     const data = fs.readFileSync(file, "utf-8");
-    const config: GuildConfig = { ...createDefaultConfig(), ...JSON.parse(data) };
-    if (!config.guildId) {
-      throw new Error("Missing guildId");
+    const rawConfig = JSON.parse(data);
+    const parsedConfig = persistedGuildConfigSchema.safeParse(rawConfig);
+    if (!parsedConfig.success) {
+      throw new Error(parsedConfig.error.issues.map(issue => `${issue.path.join(".") || "root"}: ${issue.message}`).join("; "));
     }
-    if (typeof config.guildId !== "string") {
-      throw new Error("Invalid guildId");
-    }
-    if (config.logChannelId !== null && typeof config.logChannelId !== "string") {
-      throw new Error("Invalid logChannelId");
-    }
-    if (typeof config.timeoutDuration !== "number") {
-      throw new Error("Invalid timeoutDuration");
-    }
-    if (!["multiple_messages", "detection_channels", "both"].includes(config.detectionStrategy)) {
-      throw new Error("Invalid detectionStrategy");
-    }
-    if (!Number.isInteger(config.scamMessageAmount) || config.scamMessageAmount < 1) {
-      throw new Error("Invalid scamMessageAmount");
-    }
-    if (!Array.isArray(config.detectionChannelIds) || !config.detectionChannelIds.every(id => typeof id === "string")) {
-      throw new Error("Invalid detectionChannelIds");
-    }
-    if (!Number.isInteger(config.inviteLinkChannelThreshold) || config.inviteLinkChannelThreshold < 2) {
-      throw new Error("Invalid inviteLinkChannelThreshold");
-    }
+    const config = parsedConfig.data;
     configs.set(config.guildId, config);
   } catch (error: any) {
     console.error(`Failed to load config ${file}:`, error.message);
