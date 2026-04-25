@@ -1,5 +1,6 @@
 import "dotenv/config";
 import fs from "node:fs";
+import { TTLCache } from "@isaacs/ttlcache";
 import {
   Client,
   GatewayIntentBits,
@@ -46,13 +47,28 @@ const client = new Client({
   partials: [Partials.Message, Partials.Channel, Partials.GuildMember]
 });
 
-const messageReferences = new Map<GuildId, Map<UserId, MessageReference[]>>();
-const recentlyModerated = new Set<UserId>();
-
 // Guild Config Management
 
 const defaultTimeoutDuration = 3 * 24 * 60 * 60 * 1000; // 3 days
+
 const defaultDetectionStrategy: DetectionStrategy = "multiple_messages";
+const imageScamTimeWindowMs = 5 * 60 * 1000; // 5 minutes
+
+const defaultInviteLinkChannelThreshold = 4;
+const inviteLinkTimeWindowMs = 5 * 60 * 1000; // 5 minutes
+
+const scamImagesMessageReferences = new TTLCache<string, MessageReference[]>({
+  ttl: imageScamTimeWindowMs,
+  checkAgeOnGet: true,
+  max: 100_000
+});
+const inviteLinkMessageReferences = new TTLCache<string, MessageReference[]>({
+  ttl: inviteLinkTimeWindowMs,
+  checkAgeOnGet: true,
+  max: 100_000
+});
+const recentlyModerated = new Set<UserId>();
+
 function createDefaultConfig(guildId?: GuildId): GuildConfig {
   return {
     guildId,
@@ -60,7 +76,8 @@ function createDefaultConfig(guildId?: GuildId): GuildConfig {
     timeoutDuration: defaultTimeoutDuration,
     detectionStrategy: defaultDetectionStrategy,
     scamMessageAmount: 3,
-    detectionChannelIds: []
+    detectionChannelIds: [],
+    inviteLinkChannelThreshold: defaultInviteLinkChannelThreshold
   };
 }
 
@@ -85,11 +102,14 @@ for (const file of fs.globSync("./configs/*.json")) {
     if (!["multiple_messages", "detection_channels", "both"].includes(config.detectionStrategy)) {
       throw new Error("Invalid detectionStrategy");
     }
-    if (typeof config.scamMessageAmount !== "number") {
+    if (!Number.isInteger(config.scamMessageAmount) || config.scamMessageAmount < 1) {
       throw new Error("Invalid scamMessageAmount");
     }
     if (!Array.isArray(config.detectionChannelIds) || !config.detectionChannelIds.every(id => typeof id === "string")) {
       throw new Error("Invalid detectionChannelIds");
+    }
+    if (!Number.isInteger(config.inviteLinkChannelThreshold) || config.inviteLinkChannelThreshold < 2) {
+      throw new Error("Invalid inviteLinkChannelThreshold");
     }
     configs.set(config.guildId, config);
   } catch (error: any) {
@@ -103,20 +123,48 @@ function saveConfig(guildId: GuildId) {
   fs.writeFileSync(`./configs/${guildId}.json`, JSON.stringify(config, null, 2));
 }
 
+function getRecentReferences(refs: MessageReference[], timeWindowMs: number, now = Date.now()) {
+  return refs.filter(ref => ref.timestamp > now - timeWindowMs);
+}
+
+function getReferenceCacheKey(guildId: GuildId, userId: UserId) {
+  return `${guildId}:${userId}`;
+}
+
 // SCAM DETECTION AND HANDLING
 
+function isImageScamCandidate(message: Message) {
+  return message.content.trim().length < 10 && message.attachments.size === 4 && message.attachments.every(att => att.contentType?.startsWith("image/"));
+}
+
+function containsInviteLink(message: Message) {
+  return /(?:discord\.gg|discord(?:app)?\.com\/invite)\/(\S+)/i.test(message.content);
+}
+
 async function deleteMessages(guildId: GuildId, authorId: UserId) {
-  const guildMap = messageReferences.get(guildId);
-  if (!guildMap) return 0;
+  const cacheKey = getReferenceCacheKey(guildId, authorId);
+  const imageRefs = scamImagesMessageReferences.get(cacheKey) ?? [];
+  const inviteRefs = inviteLinkMessageReferences.get(cacheKey) ?? [];
 
-  const cached = guildMap.get(authorId);
-  if (!cached || cached.length === 0) return 0;
+  const validRefs = [...getRecentReferences(imageRefs, imageScamTimeWindowMs), ...getRecentReferences(inviteRefs, inviteLinkTimeWindowMs)];
 
-  const now = Date.now();
-  const TEN_MINUTES = 10 * 60 * 1000;
-  const validRefs = cached.filter(ref => ref.timestamp > now - TEN_MINUTES);
+  if (validRefs.length === 0) {
+    scamImagesMessageReferences.delete(cacheKey);
+    inviteLinkMessageReferences.delete(cacheKey);
+    return 0;
+  }
 
-  const deletionPromises = validRefs.map(async ref => {
+  const seen = new Set<string>();
+  const deduplicatedRefs = validRefs.filter(ref => {
+    const key = `${ref.channelId}:${ref.messageId}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+
+  const messageDeletionPromises = deduplicatedRefs.map(async ref => {
     try {
       const channel = await client.channels.fetch(ref.channelId);
       if (!channel) throw new Error("Channel not found");
@@ -129,13 +177,14 @@ async function deleteMessages(guildId: GuildId, authorId: UserId) {
     }
   });
 
-  const result = await Promise.allSettled(deletionPromises);
-  guildMap.delete(authorId);
+  const messageDeletionResults = await Promise.allSettled(messageDeletionPromises);
+  scamImagesMessageReferences.delete(cacheKey);
+  inviteLinkMessageReferences.delete(cacheKey);
 
-  return result.filter(r => r.status === "fulfilled").length;
+  return messageDeletionResults.filter(result => result.status === "fulfilled").length;
 }
 
-async function logScamDetection(message: Message) {
+async function logScam(message: Message, type: "image_scam" | "invite_link_scam") {
   const config = configs.get(message.guild!.id);
 
   const logChannelId = config?.logChannelId;
@@ -154,7 +203,7 @@ async function logScamDetection(message: Message) {
   try {
     const forwardedMessage = await message.forward(logChannel);
     const embed = new EmbedBuilder()
-      .setTitle("🚨 Image scam detected")
+      .setTitle(`🚨 ${type === "image_scam" ? "Image" : "Invite link"} scam detected`)
       .setColor("#c0392b")
       .addFields({
         name: "User Info",
@@ -170,7 +219,7 @@ async function logScamDetection(message: Message) {
   }
 }
 
-async function handleScam(message: Message, config: GuildConfig) {
+async function handleScam(message: Message, type: "image_scam" | "invite_link_scam", config: GuildConfig) {
   if (!recentlyModerated.has(message.author.id)) {
     recentlyModerated.add(message.author.id);
     // Clear from debounce set after 10 seconds
@@ -183,7 +232,7 @@ async function handleScam(message: Message, config: GuildConfig) {
       });
     }
 
-    await logScamDetection(message).catch(error => {
+    await logScam(message, type).catch(error => {
       console.error("Error logging scam detection:", error.message);
     });
 
@@ -203,62 +252,75 @@ async function handleScam(message: Message, config: GuildConfig) {
 
 client.on("messageCreate", async message => {
   if (message.author.bot) return;
-  if (!message.guild || !message.channel.isTextBased() || message.channel.isDMBased() || message.channel.isThread()) return;
-  if (message.content?.trim()) return;
-  if (message.attachments.size !== 4) return;
-  if (!message.attachments.every(att => att.contentType?.startsWith("image/"))) return;
+  if (!message.guild) return;
+  if (!message.channel.isTextBased() || message.channel.isDMBased() || message.channel.isThread()) return;
 
   const config = configs.get(message.guild.id);
   if (!config) return;
 
-  const detectionStrategy = config.detectionStrategy;
-  const scamMessageAmount = config.scamMessageAmount;
-  const detectionChannels = config.detectionChannelIds;
-
   const userId = message.author.id;
   const guildId = message.guild.id;
   const channelId = message.channel.id;
-  const messageId = message.id;
 
-  let cond = false;
-  if (detectionStrategy === "detection_channels" || detectionStrategy === "both") {
-    if (detectionChannels.includes(channelId)) {
-      cond = true;
+  let imageScamDetected = false;
+  let inviteScamDetected = false;
+
+  if (isImageScamCandidate(message)) {
+    const detectionStrategy = config.detectionStrategy;
+    const scamMessageAmount = config.scamMessageAmount;
+    const detectionChannels = config.detectionChannelIds;
+
+    if (detectionStrategy === "detection_channels" || detectionStrategy === "both") {
+      if (detectionChannels.includes(channelId)) {
+        imageScamDetected = true;
+      }
+    }
+
+    if ((detectionStrategy === "multiple_messages" || detectionStrategy === "both") && !imageScamDetected) {
+      const cacheKey = getReferenceCacheKey(guildId, userId);
+      const refs = scamImagesMessageReferences.get(cacheKey) ?? [];
+      const recentRefs = getRecentReferences(refs, imageScamTimeWindowMs);
+      if (recentRefs.length >= scamMessageAmount - 1) {
+        imageScamDetected = true;
+      } else {
+        recentRefs.push({ channelId: channelId, messageId: message.id, timestamp: message.createdTimestamp });
+      }
+      scamImagesMessageReferences.set(cacheKey, recentRefs);
+    }
+
+    if (imageScamDetected) {
+      console.log(
+        `[!] Image scam detected from user ${message.author.username} (${userId}) in channel #${message.channel.name} (${channelId}) in guild "${message.guild.name}" (${guildId})`
+      );
+      handleScam(message, "image_scam", config);
+      return;
     }
   }
-  if ((detectionStrategy === "multiple_messages" || detectionStrategy === "both") && !cond) {
-    let guildMap = messageReferences.get(guildId);
-    if (!guildMap) {
-      guildMap = new Map();
-      messageReferences.set(guildId, guildMap);
-    }
-    let refs = guildMap.get(userId);
-    if (!refs) {
-      refs = [];
-      guildMap.set(userId, refs);
-    }
-    const now = Date.now();
-    const TEN_MINUTES = 10 * 60 * 1000;
-    const recentMessages = refs.filter(ref => ref.timestamp > now - TEN_MINUTES);
-    if (recentMessages.length >= scamMessageAmount - 1) {
-      cond = true;
-    }
-  }
 
-  if (cond) {
-    console.log(`[!] Scam detected from user ${message.author.username} (${userId}) in channel #${message.channel.name} (${channelId}) in guild "${message.guild.name}" (${guildId})`);
-    handleScam(message, config);
-  } else {
-    if (!messageReferences.has(guildId)) {
-      messageReferences.set(guildId, new Map());
+  if (containsInviteLink(message)) {
+    const cacheKey = getReferenceCacheKey(guildId, userId);
+    const refs = inviteLinkMessageReferences.get(cacheKey) ?? [];
+    const recentRefs = getRecentReferences(refs, inviteLinkTimeWindowMs);
+    const uniqueChannels = new Set(recentRefs.map(ref => ref.channelId));
+    uniqueChannels.add(channelId);
+
+    if (uniqueChannels.size >= config.inviteLinkChannelThreshold) {
+      inviteLinkMessageReferences.set(cacheKey, recentRefs);
+      inviteScamDetected = true;
+    } else {
+      recentRefs.push({ channelId: channelId, messageId: message.id, timestamp: message.createdTimestamp });
+      inviteLinkMessageReferences.set(cacheKey, recentRefs);
+
+      inviteScamDetected = false;
     }
-    const guildMap = messageReferences.get(guildId)!;
-    if (!guildMap.has(userId)) {
-      guildMap.set(userId, []);
+
+    if (inviteScamDetected) {
+      console.log(
+        `[!] Invite-link scam detected from user ${message.author.username} (${userId}) in channel #${message.channel.name} (${channelId}) in guild "${message.guild.name}" (${guildId})`
+      );
+      handleScam(message, "invite_link_scam", config);
+      return;
     }
-    const refs = guildMap.get(userId)!;
-    refs.push({ channelId: channelId, messageId: messageId, timestamp: message.createdTimestamp });
-    console.log(`Flagged suspicious message from user ${message.author.username} (${userId}) in channel #${message.channel.name} (${channelId}) in guild "${message.guild.name}" (${guildId})`);
   }
 });
 
@@ -384,6 +446,20 @@ async function detectionChannelsCommand(interaction: ChatInputCommandInteraction
   }
 }
 
+async function inviteLinkThresholdCommand(interaction: ChatInputCommandInteraction) {
+  const config = configs.get(interaction.guildId!);
+  if (!config) return;
+
+  const threshold = interaction.options.getInteger("threshold");
+  if (threshold !== null) {
+    config.inviteLinkChannelThreshold = threshold;
+    await interaction.reply({ content: `Invite-link channel threshold set to ${threshold}.`, flags: MessageFlags.Ephemeral });
+    saveConfig(interaction.guildId!);
+  } else {
+    await interaction.reply({ content: `Current invite-link channel threshold is ${inlineCode(config.inviteLinkChannelThreshold.toString())}.`, flags: MessageFlags.Ephemeral });
+  }
+}
+
 client.on("interactionCreate", async interaction => {
   if (interaction.isChatInputCommand()) {
     const guildId = interaction.guildId;
@@ -412,6 +488,9 @@ client.on("interactionCreate", async interaction => {
         break;
       case "detection_channels":
         await detectionChannelsCommand(interaction);
+        break;
+      case "invite_link_threshold":
+        await inviteLinkThresholdCommand(interaction);
         break;
     }
   } else if (interaction.isModalSubmit()) {

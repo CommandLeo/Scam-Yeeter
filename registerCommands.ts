@@ -72,9 +72,29 @@ export const detectionChannelsCommand = new SlashCommandBuilder()
   .addSubcommand(subcommand => subcommand.setName("list").setDescription("List all detection channels"))
   .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild);
 
+export const inviteLinkThresholdCommand = new SlashCommandBuilder()
+  .setName("invite_link_threshold")
+  .setDescription("Retrieve or set the number of unique channels for invite-link detection")
+  .addIntegerOption(option => option.setName("threshold").setDescription("Unique channel threshold").setRequired(false).setMinValue(2))
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild);
+
+export const inviteLinkTimeWindowCommand = new SlashCommandBuilder()
+  .setName("invite_link_window")
+  .setDescription("Retrieve or set the invite-link detection time window in milliseconds")
+  .addIntegerOption(option => option.setName("window_ms").setDescription("Time window in milliseconds").setRequired(false).setMinValue(1000))
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild);
+
 export async function registerCommands(guildId: string) {
   await rest.put(Routes.applicationGuildCommands(process.env.DISCORD_CLIENT_ID!, guildId), {
-    body: [logChannelCommand.toJSON(), timeoutDurationCommand.toJSON(), detectionStrategyCommand.toJSON(), scamMessageAmountCommand.toJSON(), detectionChannelsCommand.toJSON()]
+    body: [
+      logChannelCommand.toJSON(),
+      timeoutDurationCommand.toJSON(),
+      detectionStrategyCommand.toJSON(),
+      scamMessageAmountCommand.toJSON(),
+      detectionChannelsCommand.toJSON(),
+      inviteLinkThresholdCommand.toJSON(),
+      inviteLinkTimeWindowCommand.toJSON()
+    ]
   });
 }
 

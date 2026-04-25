@@ -18,4 +18,5 @@ export interface GuildConfig {
   detectionStrategy: DetectionStrategy;
   scamMessageAmount: number;
   detectionChannelIds: ChannelId[];
+  inviteLinkChannelThreshold: number;
 }
