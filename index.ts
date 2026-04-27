@@ -1,25 +1,10 @@
-import "dotenv/config";
 import fs from "node:fs";
-import { TTLCache } from "@isaacs/ttlcache";
 import { z } from "zod";
-import {
-  Client,
-  GatewayIntentBits,
-  Partials,
-  MessageFlags,
-  ChannelType,
-  TextChannel,
-  EmbedBuilder,
-  ModalBuilder,
-  ChannelSelectMenuBuilder,
-  LabelBuilder,
-  userMention,
-  channelMention,
-  inlineCode,
-  type ChatInputCommandInteraction,
-  type Message
-} from "discord.js";
-import { registerCommands } from "./registerCommands.ts";
+import { TTLCache } from "@isaacs/ttlcache";
+import { Client, GatewayIntentBits, Partials, MessageFlags, EmbedBuilder, userMention, channelMention, inlineCode, type Message } from "discord.js";
+import { commands } from "./commands/index.ts";
+import { handleDetectionChannelsModal } from "./commands/detection-channels.ts";
+import { registerCommands } from "./register-commands.ts";
 import type { UserId, GuildId, MessageReference, DetectionStrategy, GuildConfig } from "./types.ts";
 
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
@@ -63,14 +48,12 @@ const guildConfigSchema = z.object({
   logChannelId: z.string().nullable().default(null),
   timeoutDuration: z.number().default(defaultTimeoutDuration),
   detectionStrategy: z.enum(["multiple_messages", "detection_channels", "both"]).default(defaultDetectionStrategy),
-  scamMessageAmount: z.number().int().min(1).default(3),
+  suspiciousImageTreshold: z.number().int().min(1).default(3),
   detectionChannelIds: z.array(z.string()).default([]),
   inviteLinkChannelThreshold: z.number().int().min(2).default(defaultInviteLinkChannelThreshold)
 });
 
-const persistedGuildConfigSchema = guildConfigSchema.extend({
-  guildId: z.string().min(1)
-});
+const persistedGuildConfigSchema = guildConfigSchema.extend({ guildId: z.string().min(1) });
 
 const scamImagesMessageReferences = new TTLCache<string, MessageReference[]>({
   ttl: imageScamTimeWindowMs,
@@ -122,7 +105,9 @@ function getReferenceCacheKey(guildId: GuildId, userId: UserId) {
 // SCAM DETECTION AND HANDLING
 
 function isImageScamCandidate(message: Message) {
-  return message.content.trim().length < 10 && message.attachments.size === 4 && message.attachments.every(att => att.contentType?.startsWith("image/"));
+  return (
+    message.content.trim().length < 10 && message.attachments.size === 4 && message.attachments.every(att => att.contentType?.startsWith("image/"))
+  );
 }
 
 function containsInviteLink(message: Message) {
@@ -195,7 +180,9 @@ async function logScam(message: Message, type: "image_scam" | "invite_link_scam"
       .setColor("#c0392b")
       .addFields({
         name: "User Info",
-        value: [userMention(message.author.id), `Username: ${inlineCode(message.author.username)}`, `User ID: ${inlineCode(message.author.id)}`].join("\n"),
+        value: [userMention(message.author.id), `Username: ${inlineCode(message.author.username)}`, `User ID: ${inlineCode(message.author.id)}`].join(
+          "\n"
+        ),
         inline: true
       })
       .addFields({ name: "Detection Channel", value: channelMention(message.channel.id), inline: true })
@@ -203,7 +190,10 @@ async function logScam(message: Message, type: "image_scam" | "invite_link_scam"
 
     await forwardedMessage.reply({ embeds: [embed], allowedMentions: { repliedUser: false } });
   } catch (error: any) {
-    throw new Error(`Unable to send messages in log channel ${logChannelId} in guild "${message.guild!.name}" (${message.guild!.id}):`, error.message);
+    throw new Error(
+      `Unable to send messages in log channel ${logChannelId} in guild "${message.guild!.name}" (${message.guild!.id}):`,
+      error.message
+    );
   }
 }
 
@@ -216,7 +206,10 @@ async function handleScam(message: Message, type: "image_scam" | "invite_link_sc
     if (message.member?.moderatable) {
       const timeoutDuration = config.timeoutDuration;
       await message.member.timeout(timeoutDuration, "Image scam").catch(error => {
-        console.error(`Failed to timeout user ${message.author.username} (${message.author.id}) in guild "${message.guild!.name}" (${message.guild!.id}):`, error.message);
+        console.error(
+          `Failed to timeout user ${message.author.username} (${message.author.id}) in guild "${message.guild!.name}" (${message.guild!.id}):`,
+          error.message
+        );
       });
     }
 
@@ -250,25 +243,47 @@ client.on("messageCreate", async message => {
   const guildId = message.guild.id;
   const channelId = message.channel.id;
 
+  let inviteLinkScamDetected = false;
   let imageScamDetected = false;
-  let inviteScamDetected = false;
+
+  if (containsInviteLink(message)) {
+    const cacheKey = getReferenceCacheKey(guildId, userId);
+    const refs = inviteLinkMessageReferences.get(cacheKey) ?? [];
+    const recentRefs = getRecentReferences(refs, inviteLinkTimeWindowMs);
+    const uniqueChannels = new Set(recentRefs.map(ref => ref.channelId));
+    uniqueChannels.add(channelId);
+
+    if (uniqueChannels.size >= config.inviteLinkChannelThreshold) {
+      inviteLinkMessageReferences.set(cacheKey, recentRefs);
+      inviteLinkScamDetected = true;
+    } else {
+      recentRefs.push({ channelId: channelId, messageId: message.id, timestamp: message.createdTimestamp });
+      inviteLinkMessageReferences.set(cacheKey, recentRefs);
+
+      inviteLinkScamDetected = false;
+    }
+
+    if (inviteLinkScamDetected) {
+      console.log(
+        `[!] Invite-link scam detected from user ${message.author.username} (${userId}) in channel #${message.channel.name} (${channelId}) in guild "${message.guild.name}" (${guildId})`
+      );
+      handleScam(message, "invite_link_scam", config);
+      return;
+    }
+  }
 
   if (isImageScamCandidate(message)) {
-    const detectionStrategy = config.detectionStrategy;
-    const scamMessageAmount = config.scamMessageAmount;
-    const detectionChannels = config.detectionChannelIds;
-
-    if (detectionStrategy === "detection_channels" || detectionStrategy === "both") {
-      if (detectionChannels.includes(channelId)) {
+    if (config.detectionStrategy === "detection_channels" || config.detectionStrategy === "both") {
+      if (config.detectionChannelIds.includes(channelId)) {
         imageScamDetected = true;
       }
     }
 
-    if ((detectionStrategy === "multiple_messages" || detectionStrategy === "both") && !imageScamDetected) {
+    if (!imageScamDetected && (config.detectionStrategy === "multiple_messages" || config.detectionStrategy === "both")) {
       const cacheKey = getReferenceCacheKey(guildId, userId);
       const refs = scamImagesMessageReferences.get(cacheKey) ?? [];
       const recentRefs = getRecentReferences(refs, imageScamTimeWindowMs);
-      if (recentRefs.length >= scamMessageAmount - 1) {
+      if (recentRefs.length >= config.suspiciousImageTreshold - 1) {
         imageScamDetected = true;
       } else {
         recentRefs.push({ channelId: channelId, messageId: message.id, timestamp: message.createdTimestamp });
@@ -282,171 +297,24 @@ client.on("messageCreate", async message => {
       );
       handleScam(message, "image_scam", config);
       return;
-    }
-  }
-
-  if (containsInviteLink(message)) {
-    const cacheKey = getReferenceCacheKey(guildId, userId);
-    const refs = inviteLinkMessageReferences.get(cacheKey) ?? [];
-    const recentRefs = getRecentReferences(refs, inviteLinkTimeWindowMs);
-    const uniqueChannels = new Set(recentRefs.map(ref => ref.channelId));
-    uniqueChannels.add(channelId);
-
-    if (uniqueChannels.size >= config.inviteLinkChannelThreshold) {
-      inviteLinkMessageReferences.set(cacheKey, recentRefs);
-      inviteScamDetected = true;
     } else {
-      recentRefs.push({ channelId: channelId, messageId: message.id, timestamp: message.createdTimestamp });
-      inviteLinkMessageReferences.set(cacheKey, recentRefs);
-
-      inviteScamDetected = false;
-    }
-
-    if (inviteScamDetected) {
       console.log(
-        `[!] Invite-link scam detected from user ${message.author.username} (${userId}) in channel #${message.channel.name} (${channelId}) in guild "${message.guild.name}" (${guildId})`
+        `Flagged suspicious image message from user ${message.author.username} (${userId}) in channel #${message.channel.name} (${channelId}) in guild "${message.guild.name}" (${guildId})`
       );
-      handleScam(message, "invite_link_scam", config);
-      return;
     }
   }
 });
 
 // SLASH COMMANDS
 
-async function logChannelCommand(interaction: ChatInputCommandInteraction) {
-  const config = configs.get(interaction.guildId!);
-  if (!config) return;
+const commandContext = {
+  configs,
+  saveConfig,
+  createDefaultConfig,
+  defaultTimeoutDuration
+};
 
-  const channel = interaction.options.getChannel("channel");
-
-  if (channel !== null) {
-    if (!(channel instanceof TextChannel)) {
-      await interaction.reply({ content: "Please select a valid text channel.", flags: MessageFlags.Ephemeral });
-      return;
-    }
-    config.logChannelId = channel.id;
-    await interaction.reply({ content: `Log channel set to ${channelMention(channel.id)}.`, flags: MessageFlags.Ephemeral });
-    saveConfig(interaction.guildId!);
-  } else {
-    if (config.logChannelId) {
-      await interaction.reply({ content: `Current log channel is ${channelMention(config.logChannelId)}.`, flags: MessageFlags.Ephemeral });
-    } else {
-      await interaction.reply({ content: "No log channel is currently set.", flags: MessageFlags.Ephemeral });
-    }
-  }
-}
-
-async function timeoutDurationCommand(interaction: ChatInputCommandInteraction) {
-  const config = configs.get(interaction.guildId!);
-  if (!config) return;
-
-  const duration = interaction.options.getInteger("duration");
-  if (duration !== null) {
-    config.timeoutDuration = duration;
-    await interaction.reply({ content: `Timeout duration set to ${duration} milliseconds.`, flags: MessageFlags.Ephemeral });
-    saveConfig(interaction.guildId!);
-  } else {
-    await interaction.reply({
-      content: `Current timeout duration is ${config.timeoutDuration} milliseconds. Default is ${defaultTimeoutDuration} milliseconds.`,
-      flags: MessageFlags.Ephemeral
-    });
-  }
-}
-
-async function detectionStrategyCommand(interaction: ChatInputCommandInteraction) {
-  const config = configs.get(interaction.guildId!);
-  if (!config) return;
-
-  const strategy = interaction.options.getString("strategy");
-  if (strategy !== null) {
-    config.detectionStrategy = strategy as DetectionStrategy;
-    await interaction.reply({ content: `Detection strategy set to ${strategy}.`, flags: MessageFlags.Ephemeral });
-    saveConfig(interaction.guildId!);
-  } else {
-    await interaction.reply({ content: `Current detection strategy is ${inlineCode(config.detectionStrategy)}.`, flags: MessageFlags.Ephemeral });
-  }
-}
-
-async function scamMessageAmountCommand(interaction: ChatInputCommandInteraction) {
-  const config = configs.get(interaction.guildId!);
-  if (!config) return;
-
-  const amount = interaction.options.getInteger("amount");
-
-  if (amount !== null) {
-    config.scamMessageAmount = amount;
-    await interaction.reply({ content: `Scam message amount set to ${amount}.`, flags: MessageFlags.Ephemeral });
-    saveConfig(interaction.guildId!);
-  } else {
-    await interaction.reply({ content: `Current scam message amount is ${inlineCode(config.scamMessageAmount.toString())}.`, flags: MessageFlags.Ephemeral });
-  }
-}
-
-async function detectionChannelsCommand(interaction: ChatInputCommandInteraction) {
-  const config = configs.get(interaction.guildId!);
-
-  if (!config) return;
-
-  const subcommand = interaction.options.getSubcommand();
-
-  if (subcommand === "add") {
-    const channel = interaction.options.getChannel("channel", true);
-    if (config.detectionChannelIds.includes(channel.id)) {
-      await interaction.reply({ content: `${channelMention(channel.id)} is already a detection channel.`, flags: MessageFlags.Ephemeral });
-      return;
-    }
-    config.detectionChannelIds.push(channel.id);
-    await interaction.reply({ content: `Added ${channelMention(channel.id)} as a detection channel.`, flags: MessageFlags.Ephemeral });
-    saveConfig(interaction.guildId!);
-  } else if (subcommand === "remove") {
-    const channel = interaction.options.getChannel("channel", true);
-    const index = config.detectionChannelIds.indexOf(channel.id);
-    if (index === -1) {
-      await interaction.reply({ content: `${channelMention(channel.id)} is not a detection channel.`, flags: MessageFlags.Ephemeral });
-      return;
-    }
-    config.detectionChannelIds.splice(index, 1);
-    await interaction.reply({ content: `Removed ${channelMention(channel.id)} from detection channels.`, flags: MessageFlags.Ephemeral });
-    saveConfig(interaction.guildId!);
-  } else if (subcommand === "edit") {
-    const channelSelect = new ChannelSelectMenuBuilder()
-      .setCustomId("detection_channels_select")
-      .setPlaceholder("Select detection channels")
-      .setDefaultChannels(config.detectionChannelIds)
-      .addChannelTypes(ChannelType.GuildText)
-      .addChannelTypes(ChannelType.GuildAnnouncement)
-      .setMinValues(0)
-      .setMaxValues(25)
-      .setRequired(false);
-    const channelSelectLabel = new LabelBuilder().setLabel("Detection Channels").setChannelSelectMenuComponent(channelSelect);
-
-    const modal = new ModalBuilder().setCustomId("detection_channels_modal").setTitle("Edit Detection Channels").addLabelComponents(channelSelectLabel);
-
-    await interaction.showModal(modal);
-  } else if (subcommand === "list") {
-    if (config.detectionChannelIds.length === 0) {
-      await interaction.reply({ content: "No detection channels are currently set.", flags: MessageFlags.Ephemeral });
-      return;
-    }
-    const channelMentions = config.detectionChannelIds.map(id => channelMention(id)).join(", ");
-    await interaction.reply({ content: `Current detection channels: ${channelMentions}`, flags: MessageFlags.Ephemeral });
-  }
-}
-
-async function inviteLinkThresholdCommand(interaction: ChatInputCommandInteraction) {
-  const config = configs.get(interaction.guildId!);
-  if (!config) return;
-
-  const threshold = interaction.options.getInteger("threshold");
-  if (threshold !== null) {
-    config.inviteLinkChannelThreshold = threshold;
-    await interaction.reply({ content: `Invite-link channel threshold set to ${threshold}.`, flags: MessageFlags.Ephemeral });
-    saveConfig(interaction.guildId!);
-  } else {
-    await interaction.reply({ content: `Current invite-link channel threshold is ${inlineCode(config.inviteLinkChannelThreshold.toString())}.`, flags: MessageFlags.Ephemeral });
-  }
-}
+const commandsByName = new Map(commands.map(command => [command.data.toJSON().name, command]));
 
 client.on("interactionCreate", async interaction => {
   if (interaction.isChatInputCommand()) {
@@ -461,41 +329,15 @@ client.on("interactionCreate", async interaction => {
       saveConfig(guildId);
     }
 
-    switch (interaction.commandName) {
-      case "log_channel":
-        await logChannelCommand(interaction);
-        break;
-      case "timeout_duration":
-        await timeoutDurationCommand(interaction);
-        break;
-      case "detection_strategy":
-        await detectionStrategyCommand(interaction);
-        break;
-      case "scam_message_amount":
-        await scamMessageAmountCommand(interaction);
-        break;
-      case "detection_channels":
-        await detectionChannelsCommand(interaction);
-        break;
-      case "invite_link_threshold":
-        await inviteLinkThresholdCommand(interaction);
-        break;
+    const command = commandsByName.get(interaction.commandName);
+    if (!command) {
+      return;
     }
+
+    await command.execute(interaction, commandContext);
   } else if (interaction.isModalSubmit()) {
     if (interaction.customId === "detection_channels_modal") {
-      const guildId = interaction.guildId;
-      if (!guildId) {
-        await interaction.reply({ content: "This modal can only be used in a guild.", flags: MessageFlags.Ephemeral });
-        return;
-      }
-
-      const config = configs.get(guildId);
-      if (!config) return;
-
-      const selectedChannels = interaction.fields.getSelectedChannels("detection_channels_select");
-      config.detectionChannelIds = selectedChannels?.map(channel => channel.id) ?? [];
-      saveConfig(guildId);
-      await interaction.reply({ content: "Detection channels updated.", flags: MessageFlags.Ephemeral });
+      await handleDetectionChannelsModal(interaction, commandContext);
     }
   }
 });

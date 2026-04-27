@@ -1,10 +1,12 @@
 # Scam Yeeter
 
-A Discord bot designed to detect and automatically moderate image-based scam messages in your server.
+A Discord bot designed to detect and automatically moderate image-based and invite-link scam messages in your server.
 
 ## Features
 
-- **Automatic Scam Detection**: Identifies suspicious messages containing exactly 4 images with no text content
+- **Automatic Scam Detection**:
+  - Identifies suspicious messages containing exactly 4 images, in certain channels or in a short time window
+  - Detects invite-link scam patterns when a user posts discord invite links across multiple channels in a short time window
 - **Flexible Detection Strategies**: 
   - **Multiple Messages Mode**: Flags users who send multiple suspicious messages within a time window
   - **Detection Channels Mode**: Automatically flags suspicious messages in designated channels
@@ -16,7 +18,7 @@ A Discord bot designed to detect and automatically moderate image-based scam mes
 
 ## Prerequisites
 
-- Node.js (v23.6 or higher recommended) or Bun
+- Bun (1.3 or higher recommended) or Node.js (v23.6 or higher recommended)
 - A Discord bot token
 
 ## Installation
@@ -61,6 +63,7 @@ The bot stores per-guild configurations in the `configs/` directory. Each guild 
 - **Timeout Duration**: 3 days
 - **Detection Strategy**: `multiple_messages`
 - **Scam Message Amount**: 3 messages
+- **Invite-Link Channel Threshold**: 4 unique channels in 5 minutes
 - **Detection Channels**: None
 - **Log Channel**: Not set (must be configured if logging is desired)
 
@@ -85,10 +88,12 @@ Set or view the detection strategy.
 - `multiple_messages`: Detects when a user sends multiple suspicious messages (configurable threshold)
 - `detection_channels`: Any suspicious message in designated channels is flagged immediately
 
-### `/scam_message_amount [<amount>]`
-Set or view the number of suspicious messages required to trigger detection (only applies to the `multiple_messages` strategy).
-- **amount** (optional): Number of messages (e.g. 3)
-- If no amount is provided, displays the current setting
+Note: Detection strategies above apply to image-scam detection. Invite-link scam detection is handled separately using a unique-channel threshold.
+
+### `/image_messages_threshold [<threshold>]`
+Set or view the number of suspicious messages required to trigger image-scam detection (only applies to the `multiple_messages` strategy).
+- **threshold** (optional): Minimum number of messages (e.g. 3)
+- If no threshold is provided, displays the current setting
 
 ### `/detection_channels <subcommand>`
 Manage detection channels (only applies to `detection_channels` strategy).
@@ -98,3 +103,8 @@ Manage detection channels (only applies to `detection_channels` strategy).
 - `remove <channel>`: Remove a channel from the detection list
 - `edit`: Opens a modal to select multiple channels at once
 - `list`: Shows all current detection channels
+
+### `/invite_link_threshold [<threshold>]`
+Set or view the number of unique channels in which a user must post invite discord invite links (within a time window) before detection triggers.
+- **threshold** (optional): Minimum unique channel count (minimum: 2)
+- If no threshold is provided, displays the current setting

@@ -16,7 +16,7 @@ export interface GuildConfig {
   logChannelId: ChannelId | null;
   timeoutDuration: number;
   detectionStrategy: DetectionStrategy;
-  scamMessageAmount: number;
+  suspiciousImageTreshold: number;
   detectionChannelIds: ChannelId[];
   inviteLinkChannelThreshold: number;
 }
