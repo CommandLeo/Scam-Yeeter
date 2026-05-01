@@ -205,12 +205,14 @@ async function handleScam(message: Message, type: "image_scam" | "invite_link_sc
 
     if (message.member?.moderatable) {
       const timeoutDuration = config.timeoutDuration;
-      await message.member.timeout(timeoutDuration, "Image scam").catch(error => {
-        console.error(
-          `Failed to timeout user ${message.author.username} (${message.author.id}) in guild "${message.guild!.name}" (${message.guild!.id}):`,
-          error.message
-        );
-      });
+      await message.member
+        .timeout(timeoutDuration, type === "image_scam" ? "Image scam" : type === "invite_link_scam" ? "Invite link scam" : undefined)
+        .catch(error => {
+          console.error(
+            `Failed to timeout user ${message.author.username} (${message.author.id}) in guild "${message.guild!.name}" (${message.guild!.id}):`,
+            error.message
+          );
+        });
     }
 
     await logScam(message, type).catch(error => {
