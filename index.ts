@@ -1,7 +1,19 @@
 import fs from "node:fs";
 import { z } from "zod";
 import { TTLCache } from "@isaacs/ttlcache";
-import { Client, GatewayIntentBits, Partials, MessageFlags, EmbedBuilder, userMention, channelMention, inlineCode, type Message } from "discord.js";
+import {
+  Client,
+  GatewayIntentBits,
+  Partials,
+  MessageFlags,
+  RESTJSONErrorCodes,
+  EmbedBuilder,
+  userMention,
+  channelMention,
+  inlineCode,
+  type Message,
+  GuildChannel
+} from "discord.js";
 import { commands } from "./commands/index.ts";
 import { handleDetectionChannelsModal } from "./commands/detection-channels.ts";
 import { registerCommands } from "./register-commands.ts";
@@ -145,7 +157,9 @@ async function deleteMessages(guildId: GuildId, authorId: UserId) {
 
       await channel.messages.delete(ref.messageId);
     } catch (error: any) {
-      console.log(`Failed to delete message ${ref.messageId} in channel ${ref.channelId}:`, error.message);
+      if (error.code !== RESTJSONErrorCodes.UnknownMessage) {
+        console.log(`Failed to delete message ${ref.messageId} in channel ${ref.channelId}:`, error.message);
+      }
       throw error;
     }
   });
@@ -198,20 +212,21 @@ async function logScam(message: Message, type: "image_scam" | "invite_link_scam"
 }
 
 async function handleScam(message: Message, type: "image_scam" | "invite_link_scam", config: GuildConfig) {
-  if (!recentlyModerated.has(message.author.id)) {
-    recentlyModerated.add(message.author.id);
+  const user = message.author;
+  const guild = message.guild!;
+  const channel = message.channel as GuildChannel;
+
+  if (!recentlyModerated.has(user.id)) {
+    recentlyModerated.add(user.id);
     // Clear from debounce set after 10 seconds
-    setTimeout(() => recentlyModerated.delete(message.author.id), 10_000);
+    setTimeout(() => recentlyModerated.delete(user.id), 10_000);
 
     if (message.member?.moderatable) {
       const timeoutDuration = config.timeoutDuration;
       await message.member
         .timeout(timeoutDuration, type === "image_scam" ? "Image scam" : type === "invite_link_scam" ? "Invite link scam" : undefined)
         .catch(error => {
-          console.error(
-            `Failed to timeout user ${message.author.username} (${message.author.id}) in guild "${message.guild!.name}" (${message.guild!.id}):`,
-            error.message
-          );
+          console.error(`Failed to timeout user ${user.username} (${user.id}) in guild "${guild.name}" (${guild.id}):`, error.message);
         });
     }
 
@@ -219,16 +234,11 @@ async function handleScam(message: Message, type: "image_scam" | "invite_link_sc
       console.error("Error logging scam detection:", error.message);
     });
 
-    if (message.deletable) {
-      message.delete().catch(error => {
-        console.error("Error deleting detected message:", error.message);
-      });
-    }
-    const deletedMessagesAmount = await deleteMessages(message.guild!.id, message.author.id);
+    const deletedMessagesAmount = await deleteMessages(guild.id, user.id);
+
+    let logMessage = `[!] ${type === "image_scam" ? "Image" : "Invite link"} scam detected from user ${user.username} (${user.id}) in channel #${channel.name} (${channel.id}) in guild "${guild.name}" (${guild.id})`;
     if (deletedMessagesAmount > 0) {
-      console.log(
-        `Deleted ${deletedMessagesAmount} additional messages from user ${message.author.username} (${message.author.id}) in guild "${message.guild!.name}" (${message.guild!.id})`
-      );
+      logMessage += `\n └─ Deleted ${deletedMessagesAmount} message${deletedMessagesAmount === 1 ? "" : "s"}`;
     }
   }
 }
@@ -245,9 +255,6 @@ client.on("messageCreate", async message => {
   const guildId = message.guild.id;
   const channelId = message.channel.id;
 
-  let inviteLinkScamDetected = false;
-  let imageScamDetected = false;
-
   if (containsInviteLink(message)) {
     const cacheKey = getReferenceCacheKey(guildId, userId);
     const refs = inviteLinkMessageReferences.get(cacheKey) ?? [];
@@ -255,48 +262,32 @@ client.on("messageCreate", async message => {
     const uniqueChannels = new Set(recentRefs.map(ref => ref.channelId));
     uniqueChannels.add(channelId);
 
-    if (uniqueChannels.size >= config.inviteLinkChannelThreshold) {
-      inviteLinkMessageReferences.set(cacheKey, recentRefs);
-      inviteLinkScamDetected = true;
-    } else {
-      recentRefs.push({ channelId: channelId, messageId: message.id, timestamp: message.createdTimestamp });
-      inviteLinkMessageReferences.set(cacheKey, recentRefs);
+    recentRefs.push({ channelId: channelId, messageId: message.id, timestamp: message.createdTimestamp });
+    inviteLinkMessageReferences.set(cacheKey, recentRefs);
 
-      inviteLinkScamDetected = false;
-    }
+    let inviteLinkScamDetected = uniqueChannels.size >= config.inviteLinkChannelThreshold;
 
     if (inviteLinkScamDetected) {
-      console.log(
-        `[!] Invite-link scam detected from user ${message.author.username} (${userId}) in channel #${message.channel.name} (${channelId}) in guild "${message.guild.name}" (${guildId})`
-      );
       handleScam(message, "invite_link_scam", config);
       return;
     }
   }
 
   if (isImageScamCandidate(message)) {
-    if (config.detectionStrategy === "detection_channels" || config.detectionStrategy === "both") {
-      if (config.detectionChannelIds.includes(channelId)) {
-        imageScamDetected = true;
-      }
-    }
+    const cacheKey = getReferenceCacheKey(guildId, userId);
+    const refs = scamImagesMessageReferences.get(cacheKey) ?? [];
+    const recentRefs = getRecentReferences(refs, imageScamTimeWindowMs);
 
-    if (!imageScamDetected && (config.detectionStrategy === "multiple_messages" || config.detectionStrategy === "both")) {
-      const cacheKey = getReferenceCacheKey(guildId, userId);
-      const refs = scamImagesMessageReferences.get(cacheKey) ?? [];
-      const recentRefs = getRecentReferences(refs, imageScamTimeWindowMs);
-      if (recentRefs.length >= config.suspiciousImageTreshold - 1) {
-        imageScamDetected = true;
-      } else {
-        recentRefs.push({ channelId: channelId, messageId: message.id, timestamp: message.createdTimestamp });
-      }
-      scamImagesMessageReferences.set(cacheKey, recentRefs);
-    }
+    recentRefs.push({ channelId: channelId, messageId: message.id, timestamp: message.createdTimestamp });
+    scamImagesMessageReferences.set(cacheKey, recentRefs);
+
+    let imageScamDetected =
+      ((config.detectionStrategy === "detection_channels" || config.detectionStrategy === "both") &&
+        config.detectionChannelIds.includes(channelId)) ||
+      ((config.detectionStrategy === "multiple_messages" || config.detectionStrategy === "both") &&
+        recentRefs.length >= config.suspiciousImageTreshold);
 
     if (imageScamDetected) {
-      console.log(
-        `[!] Image scam detected from user ${message.author.username} (${userId}) in channel #${message.channel.name} (${channelId}) in guild "${message.guild.name}" (${guildId})`
-      );
       handleScam(message, "image_scam", config);
       return;
     } else {
