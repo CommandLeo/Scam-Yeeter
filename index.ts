@@ -240,6 +240,7 @@ async function handleScam(message: Message, type: "image_scam" | "invite_link_sc
     if (deletedMessagesAmount > 0) {
       logMessage += `\n └─ Deleted ${deletedMessagesAmount} message${deletedMessagesAmount === 1 ? "" : "s"}`;
     }
+    console.log(logMessage);
   }
 }
 
