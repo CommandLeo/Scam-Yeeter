@@ -117,9 +117,10 @@ function getReferenceCacheKey(guildId: GuildId, userId: UserId) {
 // SCAM DETECTION AND HANDLING
 
 function isImageScamCandidate(message: Message) {
-  return (
-    message.content.trim().length < 10 && message.attachments.size === 4 && message.attachments.every(att => att.contentType?.startsWith("image/"))
-  );
+  const lowText = message.content.trim().length < 5;
+  const hasMultipleAttachments = message.attachments.size >= 2 && message.attachments.size <= 4;
+  const allAttachmentsAreImages = message.attachments.every(att => att.contentType?.startsWith("image/"));
+  return (message.mentions.everyone || lowText) && hasMultipleAttachments && allAttachmentsAreImages;
 }
 
 function containsInviteLink(message: Message) {
