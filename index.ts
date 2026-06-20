@@ -270,8 +270,7 @@ client.on("messageCreate", async message => {
     let inviteLinkScamDetected = uniqueChannels.size >= config.inviteLinkChannelThreshold;
 
     if (inviteLinkScamDetected) {
-      handleScam(message, "invite_link_scam", config);
-      return;
+      return handleScam(message, "invite_link_scam", config);
     }
   }
 
@@ -290,12 +289,7 @@ client.on("messageCreate", async message => {
         recentRefs.length >= config.suspiciousImageTreshold);
 
     if (imageScamDetected) {
-      handleScam(message, "image_scam", config);
-      return;
-    } else {
-      console.log(
-        `Flagged suspicious image message from user ${message.author.username} (${userId}) in channel #${message.channel.name} (${channelId}) in guild "${message.guild.name}" (${guildId})`
-      );
+      return handleScam(message, "image_scam", config);
     }
   }
 });
