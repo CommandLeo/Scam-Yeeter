@@ -118,9 +118,9 @@ function getReferenceCacheKey(guildId: GuildId, userId: UserId) {
 
 function isImageScamCandidate(message: Message) {
   const lowText = message.content.trim().length < 5;
-  const hasMultipleAttachments = message.attachments.size >= 2 && message.attachments.size <= 4;
+  const hasAttachments = message.attachments.size > 0;
   const allAttachmentsAreImages = message.attachments.every(att => att.contentType?.startsWith("image/"));
-  return (message.mentions.everyone || lowText) && hasMultipleAttachments && allAttachmentsAreImages;
+  return (message.mentions.everyone || lowText) && hasAttachments && allAttachmentsAreImages;
 }
 
 function containsInviteLink(message: Message) {
